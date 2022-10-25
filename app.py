@@ -123,6 +123,7 @@ def ocr_output():
         return json_obj
 
 app= Flask(__name__)
+CORS(app)
 
 @app.route('/autofillform', methods = ['POST'])
 def ReturnJSON():
