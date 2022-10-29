@@ -1,6 +1,7 @@
 from flask import Flask, jsonify,request
 
 import cv2
+import flask_cors import CORS
 import pytesseract
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,8 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_KEY=os.getenv("API_KEY")
-pytesseract.pytesseract.tesseract_cmd = r'D:\tesseract\tesseract.exe'
-
 class ImageConstantROI():
     class CCCD(object):
         ROIS = {
@@ -26,6 +25,7 @@ class ImageConstantROI():
 #importing base image
 baseImg = cv2.imread('base.png')
 baseH, baseW, baseC = baseImg.shape
+
 
 #Cropped Image
 def cropImageRoi(image, roi):
@@ -79,9 +79,79 @@ def extractDataFromIdCard(img):
             #Extract data from image using pytesseract
             data+= pytesseract.image_to_string(crop_img, config = MODEL_CONFIG).replace(" ", "") + ' '
             output_data=re.sub('[QWERTYUIOPASDqwertyuiopasdghjklzxcvbnGHJKLZXCVBN~!@#$%^&*((_+={|\:?.))]', '',data)
-            print(output_data)
         output[key]=output_data.strip()
     return output
+
+def extractDataFromRest(img):
+    img=cv2.resize(img,(1135,710))
+    count=0
+    MODEL_CONFIG =r'-l eng --oem 3 --psm 6'
+    custom_config = '-l eng --oem 3 --psm 6'
+    json_data={}
+    data=''
+    data+= pytesseract.image_to_string(img, config = MODEL_CONFIG).replace(" ", "") + ' '
+
+    roi_name=(412,194,700,258)
+    name_img=cropImageRoi(img, roi_name)
+    text_name=pytesseract.image_to_string(name_img,lang='eng', config=custom_config)
+    name_data= re.findall(r'\b[A-Z]+(?:\s+[A-Z]+)*\b', text_name)
+
+    roi_sex=(742, 489, 100, 52)
+    sex_img=cropImageRoi(img, roi_sex)
+    text_sex=pytesseract.image_to_string(sex_img,lang='eng', config=custom_config)
+    sex_data= re.findall(r'\b[a-zA-Z]\s', text_sex)
+
+    health_data= re.findall('\d{4}-\d{3}-\d{3}-\w{2}',data)
+    date_data=re.findall('([12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01]))',data)
+
+    roi_sign= (55, 570,364,128)
+    signature=cropImageRoi(img, roi_sign)
+    cv2.imwrite("sign.png", signature);
+    with open("sign.png", "rb") as image_file:
+        image64 = base64.b64encode(image_file.read()).decode('utf-8')
+
+    if(len(name_data)==0):
+        json_data["name"]=""
+        count=count+1
+    else:
+        json_data["name"]=name_data[0]
+    if(len(health_data)==0):
+        json_data["health_id"]=""
+        count=count+1
+    else:
+        json_data["health_id"]=health_data[0]
+        
+    if(len(date_data)==0):
+        json_data["birth_date"]=""
+        json_data["issue_date"]=""
+        json_data["expiry_date"]=""
+        count=count+1
+    elif(len(date_data)==1):
+        json_data["birth_date"]=date_data[0][0]
+        json_data["issue_date"]=""
+        json_data["expiry_date"]=""
+    elif(len(date_data)==2):
+        json_data["birth_date"]=date_data[0][0]
+        json_data["issue_date"]=date_data[1][0]
+        json_data["expiry_date"]=""
+    else:
+        json_data["birth_date"]=date_data[0][0]
+        json_data["issue_date"]=date_data[1][0]
+        json_data["expiry_date"]=date_data[2][0]
+
+    if(len(sex_data)==0):
+        json_data["sex"]=""
+    else:
+        json_data["sex"]=sex_data[0]
+
+    json_data["signature"]=image64
+    json_obj=jsonify(json_data)
+
+    if(count>=3):
+        error={error:"unable to extract data"}
+        return jsonify(error)
+    else:
+        return json_obj
 
 def ocr_output():
     img2 = cv2.imread('testimage.png')
@@ -127,17 +197,31 @@ CORS(app)
 
 @app.route('/autofillform', methods = ['POST'])
 def ReturnJSON():
-    if request.method == "POST":
-        img2get=(request.json.get('image'))
-        with open("testimage.png", "wb") as fh:
-            fh.write(base64.b64decode(img2get))
+    try:
+        if request.method == "POST":
+            img2get=(request.json.get('image'))
+            with open("testimage.png", "wb") as fh:
+                fh.write(base64.b64decode(img2get))
         if(request.headers.get('API_KEY')==API_KEY):
             if(ocr_output()==None):
-                return("Please enter image in correct orientation")
+                img=cv2.imread('testimage.png')
+                try:
+                    return extractDataFromRest(img)
+                except:
+                    error={"error":"Unable to extract data"}
+                    return jsonify(error)
             else:
-                return (ocr_output())
+                try:
+                    return (ocr_output())
+                except:
+                    error={"error":"Unable to extract data"}
+                    return jsonify(error)
         else:
-            return("Authorization Failed !!")
+            error={"error":"authorization error"}
+            return jsonify(error)
+    except:
+        error={"error":"Bad request"}
+        return jsonify(error)
 
 if __name__ == '__main__':
     app.run(debug=False,ssl_context="adhoc")
